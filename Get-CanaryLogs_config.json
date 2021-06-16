@@ -4,5 +4,6 @@
     "statefile": "C:\\LogRhythm\\Scripts\\Get-CanaryLogs\\Get-CanaryLogs_state.state",
     "domainhash":"<DOMAINHASHGOESHERE>",
     "apitoken":"<APITOKENGOESHERE>",
-    "webhookendpoint":"https://<webhooklistener>"
+    "webhookendpoint":"http://<webhooklistener>",
+    "auditfetchlimit":100
 }
