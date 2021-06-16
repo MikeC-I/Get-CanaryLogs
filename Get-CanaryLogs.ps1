@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-    Get-CanaryLogs.ps1 is a PowerShell script for retrieving Canary incident events from the Canary API and sending the logs as webhooks to a listener.
+    Get-CanaryLogs.ps1 is a PowerShell script for retrieving Canary incident and audit events from the Canary API and sending the logs as webhooks to a listener.
 .DESCRIPTION
-    Get-CanaryLogs.ps1 is a PowerShell script for retrieving Canary incident events from the Canary API and sending the logs as webhooks to a listener.
+    Get-CanaryLogs.ps1 is a PowerShell script for retrieving Canary incident and audit events from the Canary API and sending the logs as webhooks to a listener.
     Global configuration parameters are stored as JSON in Get-CanaryLogs_config.json (or whatever you want to name it, see line 21 below).
 .PARAMETER IgnoreCertErrors
     Will ignore certificate errors.  Useful in environments with proxies or other HTTPS intermediaries
@@ -11,12 +11,15 @@
 .NOTES
     Change Log:
         2021/06/11 - First draft version
+        2021/06/16 - Added functionality to fetch audit events
  #>
 
 [CmdletBinding()]
 param(
     [switch]$IgnoreCertErrors
 )
+
+### Global Variables - yeah I know they're bad, don't @ me ###
 
 $configfile = "C:\LogRhythm\Scripts\Get-CanaryLogs\Get-CanaryLogs_config.json"
 $config = Get-Content -Raw $configfile | ConvertFrom-Json
@@ -25,7 +28,12 @@ $globalloglevel = $config.loglevel
 $statefile = $config.statefile
 $domainhash = $config.domainhash
 $apitoken = $config.apitoken
+$auditfetchlimit = $config.auditfetchlimit
 $webhookendpoint = $config.webhookendpoint
+$auditfetcherror = ""
+$incidentfetcherror = ""
+
+### Goofy certificate stuff ###
 
 if ($IgnoreCertErrors.IsPresent) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -112,45 +120,58 @@ Else {
     }
 }
 
+### Sweet Functions ###
+
 Function Get-State {
     $statefile_exists = Test-Path -Path $statefile
-    [Int32]$lastUpdateID = 0
-    if ($statefile_exists -eq 0) {
+    if ($statefile_exists -eq $false) {
         Write-Log -loglevel 2 -logdetail "State file does not exist. Script will proceed with last updated_id = 0"
-        $lastUpdateID = 0
+        $incident_state = 0
+        $audit_state = 0
     }
     Else{
         Try {
-            Write-Log -loglevel 1 -logdetail "Reading last update_id from state file $($statefile)"
-            $stateraw = Get-Content $statefile
-            $lastUpdateID = [int]$stateraw
-            Write-Log -loglevel 1 -logdetail "Retrieved last update_id of $($state) from $($statefile)"        
+            Write-Log -loglevel 1 -logdetail "Reading state from state file $($statefile)"
+            $state = Get-Content $statefile | ConvertFrom-Json
+            [Int32]$incident_state = $state.incidentstate
+            [Int32]$audit_state = $state.auditstate
+            Write-Log -loglevel 1 -logdetail "Retrieved incident state: $($incident_state); and audit state: $($audit_state) from $($statefile)"        
         }
         Catch {
             Write-Log -loglevel 3 -loglevel "***WARNING*** Could not read $($statefile). Script will proceed with last updated_id = 0"
-            $lastUpdateID = 0        
+                    $incident_state = 0
+                    $audit_state = 0  
         }
     }
-    Return [Int32]$lastUpdateID
+    $statearray = New-Object PSObject -Property @{
+        "incidentstate" = $incident_state
+        "auditstate" = $audit_state
+    }
+    Return $statearray
 }
 
 Function Write-State {
     [CmdletBinding()]
     param (
         [Parameter()]
-        [int]$LastUpdateID
+        [int]$IncidentState,
+        [int]$AuditState
     )
+    $stateJson = New-Object PSObject -Property @{
+        "incidentstate" = $IncidentState
+        "auditstate" = $AuditState
+    }
+    
     try {
         $state_exists = Test-Path -Path $statefile
-        if ($statefile_exists -eq 1) {
-            Write-Log -loglevel 1 -logdetail "Writing Last Update ID of $($LastUpdateID) to state file $($statefile)"
-            $LastUpdateID | Out-File -FilePath $statefile
+        if ($state_exists -eq $true) {
+            Write-Log -loglevel 1 -logdetail "Writing last update ids (Audit: $($stateJson.auditstate); Incident: $($stateJson.incidentstate)) to state file $($statefile)"
+            $stateJson | ConvertTo-Json | Out-File -FilePath $statefile
         }
         else {
             Write-Log -loglevel 1 -logdetail "State file does not exist. Creating $($statefile)"
-            
-            Write-Log -loglevel 1 -logdetail "Writing Last Update ID of $($LastUpdateID) to state file $($statefile)"
-            $LastUpdateID | Out-File -FilePath $statefile
+            Write-Log -loglevel 1 -logdetail "Writing last update ids (Audit: $($stateJson.auditstate); Incident: $($stateJson.incidentstate)) to state file $($statefile)"
+            $stateJson | ConvertTo-Json | Out-File -FilePath $statefile
         }
     }
     catch {
@@ -175,6 +196,7 @@ Function Get-IncidentEvents {
     }
     Catch {
         Write-Log -loglevel 3 -logdetail "***ERROR*** An error occured retreiving events from API: $_"
+        $incidentfetcherror = $_
     }
     $max_update_id = $LastUpdateID
     $total_incidents = 0    
@@ -185,25 +207,114 @@ Function Get-IncidentEvents {
         }
     }
     Write-Log -loglevel 2 -logdetail "Retrieved $($total_incidents) total incidents. Last update_id = $($max_update_id)"
-    $returnresult = @()
-    $returnresult += $result
-    $returnresult += $max_update_id
-    Return ,$returnresult  # Returns an array, with the incident results as Index 0, and the max updated_id as Index 1
+    $returnresult = New-Object PSObject -Property @{
+        "results" = $result
+        "last_id" = $max_update_id
+    }
+    Return $returnresult 
+}
+
+Function Get-AuditEvents {
+    [CmdletBinding()]
+    param (
+        [Parameter()]
+        [int]$LastUpdateID
+    )
+    $uri = "https://$($domainhash).canary.tools//api/v1/audit_trail/fetch?limit=$auditfetchlimit"
+    $params = @{
+        'auth_token' = $apitoken
+    }
+    Write-Log -loglevel 1 -logdetail "Querying API for new audit events..."
+    Try {
+        $result = Invoke-RestMethod -Uri $uri -Body $params -Method GET
+    }
+    Catch {
+        Write-Log -loglevel 3 -logdetail "***ERROR*** An error occured retreiving audit events from API: $_"
+        $auditfetcherror = $_
+    }
+    $max_update_id = $LastUpdateID
+    $total_events = 0    
+    $audit_trail = @()
+    ForEach ($i in $result.audit_trail) {
+            if ($i.id -gt $LastUpdateID) {
+                if ($i.id -gt $max_update_id) {
+                    $max_update_id = $i.id  
+                }
+            $total_events += 1
+            $audit_trail += $i
+        }
+    }
+    Write-Log -loglevel 2 -logdetail "Retrieved $($total_events) total audit events. Last update_id = $($max_update_id)"
+    $returnresult = New-Object PSObject -Property @{
+        "results" = $audit_trail
+        "last_id" = $max_update_id
+    }
+    Return $returnresult 
 }
 
 Function Send-IncidentEvents ($incidents) {
     # THIS FUNCTION IS TOTALLY UNTESTED.  I HAVE NO IDEA IF IT WILL WORK CORRECTLY
-    # $incidents.incidents | ConvertTo-Json | Out-File -FilePath "C:\LogRHythm\Scripts\Get-CanaryLogs\output.txt"
+    # $incidents.incidents | ConvertTo-Json | Out-File -FilePath "C:\LogRhythm\Scripts\Get-CanaryLogs\output.txt"
 
-    Write-Log -loglevel 2 -logdetail "Sending results to $($webhookendpoint)..."
+    Write-Log -loglevel 2 -logdetail "Sending incident event results to $($webhookendpoint)..."
     Try {
-        $rawincidents = $incidents.incidents | ConvertTo-Json
-        $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawincidents -Method POST
-        Write-Log -loglevel 2 -logdetail "Incidents sent. Result: $($result.StatusCode) $($result.StatusDescription)"
+        if ($incidents.incidents.Count -eq 0) {
+            $rawbody = New-Object PSObject -Property @{
+                Message = "No new incidents"
+            }
+            if ($incidentfetcherror -ne "")  {
+                $rawbody.Message = "No incidents sent. There were errors encountered fetching incidents; see log for more details: $($incidentfetcherror)"
+            }
+            $body = $rawbody | ConvertTo-Json
+            $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST
+            Write-Log -loglevel 2 -logdetail "No new incidents to send.  Sent status message. Result: $($result.StatusCode) $($result.StatusDescription)"
+        }
+        else {
+            Write-Log -loglevel 2 -logdetail "Sending $(($incidents.incidents).Count) incident logs..."
+            $counter = 0
+            ForEach ($i in $incidents.incidents) {
+                $counter++
+                $rawincident = $i | ConvertTo-Json
+                $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawincident -Method POST
+                Write-Log -loglevel 2 -logdetail "Incident ($counter) sent. Result: $($result.StatusCode) $($result.StatusDescription)"
+            }
+        }
     }
     Catch {
         Write-Log -loglevel 3 -logdetail "***ERROR*** An error occured sending webhook: $_"
     }
+}
+
+Function Send-AuditEvents ($audits) {
+    Write-Log -loglevel 2 -logdetail "Sending audit event results to $($webhookendpoint)..."
+    
+    Try {
+        if ($audits.Count -eq 0) {
+            $rawbody = New-Object PSObject -Property @{
+                Message = "No new audit events"
+            }
+            if ($auditfetcherror -ne "")  {
+                $rawbody.Message = "No audit events sent. There were errors encountered fetching audit events; see log for more details: $($auditfetcherror)"
+            }
+            $body = $rawbody | ConvertTo-Json
+            $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST
+            Write-Log -loglevel 2 -logdetail "No new audit events to send.  Sent status message. Result: $($result.StatusCode) $($result.StatusDescription)"
+        }
+        else {
+            Write-Log -loglevel 2 -logdetail "Sending $(($audits).Count) audit events..."
+            $counter = 0
+            ForEach ($i in $audits) {
+                $counter++
+                $rawaudits = $i | ConvertTo-Json
+                $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawaudits -Method POST
+                Write-Log -loglevel 2 -logdetail "Audit event ($counter) sent. Result: $($result.StatusCode) $($result.StatusDescription)"
+            }
+        }
+    }
+    Catch {
+        Write-Log -loglevel 3 -logdetail "***ERROR*** An error occured sending webhook: $_"
+    }
+    #>
 }
 
 ### MAIN ###
@@ -212,9 +323,8 @@ if ($IgnoreCertErrors.IsPresent) {
     Write-Log -loglevel 3 -logdetail "***WARNING*** Script invoked with IgnoreCertErrors. Certificate errors will be ignored"
 }
 $last_state = Get-State
-if ($last_state.GetType().Name -ne "Int32") {  # This code is apparently necessary because of what I can only assume is a bug in PowerShell. When the logfile does not exist, for some reason the Get-State function returns a System Object type rather than an integer. I have absolutely no idea why, it makes zero sense. None. The Get-State function should explicitl return an integer every time, or at least that's how it's coded to me...I don't know man...
-    [Int32]$last_state = 0
-}
-$results = Get-IncidentEvents -LastUpdateID $last_state
-Send-IncidentEvents $results[0]
-Write-State -LastUpdateID $results[1]
+$incidentresults = Get-IncidentEvents -LastUpdateID $last_state.incidentstate
+$auditresults = Get-AuditEvents -LastUpdateID $last_state.auditstate
+Send-IncidentEvents $incidentresults.results
+Send-AuditEvents $auditresults.results
+Write-State -IncidentState $incidentresults.last_id -AuditState $auditresults.last_id
