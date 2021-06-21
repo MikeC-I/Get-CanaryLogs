@@ -74,14 +74,13 @@ Else {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
 
- Function Write-Log {  
+Function Write-Log {  
 
     # This function provides logging functionality.  It writes to a log file provided by the $logfile variable, prepending the date and hostname to each line
     # Currently implemented 4 logging levels.  1 = DEBUG / VERBOSE, 2 = INFO, 3 = ERROR / WARNING, 4 = CRITICAL
     # Must use the variable $globalloglevel to define what logs will be written.  1 = All logs, 2 = Info and above, 3 = Warning and above, 4 = Only critical.  If no $globalloglevel is defined, defaults to 2
     # Must use the variable $logfile to define the filename (full path or relative path) of the log file to be written to
-    # Auto-rotate feature written but un-tested (will rotate logfile after 10 MB)
-           
+               
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory = $true)] [string]$logdetail,
@@ -96,8 +95,8 @@ Else {
             $logfile_exists = Test-Path -Path $logfile
             if ($logfile_exists -eq 1) {
                 if ((Get-Item $logfile).length/1MB -ge 10) {
-                    $logfilename = ((Get-Item $logdetail).Name).ToString()
-                    $newfilename = "$($logfilename)"+ (Get-Date -Format "yyyyMMddhhmmss").ToString()
+                    $logfilename = [io.path]::GetFileNameWithoutExtension($logfile)
+                    $newfilename = "$($logfilename)"+ (Get-Date -Format "yyyyMMddhhmmss").ToString() + ".log"
                     Rename-Item -Path $logfile -NewName $newfilename
                     New-Item $logfile -ItemType File
                     $this_Date = Get-Date -Format "MM\/dd\/yyyy hh:mm:ss tt"
