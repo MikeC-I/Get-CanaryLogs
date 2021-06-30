@@ -5,13 +5,15 @@
     Get-CanaryLogs.ps1 is a PowerShell script for retrieving Canary incident and audit events from the Canary API and sending the logs as webhooks to a listener.
     Global configuration parameters are stored as JSON in Get-CanaryLogs_config.json (or whatever you want to name it, see line 21 below).
 .PARAMETER IgnoreCertErrors
-    Will ignore certificate errors.  Useful in environments with proxies or other HTTPS intermediaries
+    (Switch) Will ignore certificate errors.  Useful in environments with proxies or other HTTPS intermediaries.
 .EXAMPLE
     Get-CanaryLogs.ps1 -IgnoreCertErrors
 .NOTES
+    Tested with Canary API v1 (as of June 30, 2021)    
     Change Log:
         2021/06/11 - First draft version
         2021/06/16 - Added functionality to fetch audit events
+        2021/06/30 - Added UNIX datetime fields
  #>
 
 [CmdletBinding()]
@@ -74,7 +76,7 @@ Else {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
 
-Function Write-Log {  
+ Function Write-Log {  
 
     # This function provides logging functionality.  It writes to a log file provided by the $logfile variable, prepending the date and hostname to each line
     # Currently implemented 4 logging levels.  1 = DEBUG / VERBOSE, 2 = INFO, 3 = ERROR / WARNING, 4 = CRITICAL
@@ -252,14 +254,13 @@ Function Get-AuditEvents {
 }
 
 Function Send-IncidentEvents ($incidents) {
-    # THIS FUNCTION IS TOTALLY UNTESTED.  I HAVE NO IDEA IF IT WILL WORK CORRECTLY
-    # $incidents.incidents | ConvertTo-Json | Out-File -FilePath "C:\LogRhythm\Scripts\Get-CanaryLogs\output.txt"
-
     Write-Log -loglevel 2 -logdetail "Sending incident event results to $($webhookendpoint)..."
     Try {
         if ($incidents.incidents.Count -eq 0) {
             $rawbody = New-Object PSObject -Property @{
+                Log_Type = "Canary_ScriptInfo"
                 Message = "No new incidents"
+                Msg_Time = [int](Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s -Millisecond 0)
             }
             if ($incidentfetcherror -ne "")  {
                 $rawbody.Message = "No incidents sent. There were errors encountered fetching incidents; see log for more details: $($incidentfetcherror)"
@@ -273,6 +274,7 @@ Function Send-IncidentEvents ($incidents) {
             $counter = 0
             ForEach ($i in $incidents.incidents) {
                 $counter++
+                $i | Add-Member -NotePropertyName "Log_Type" -NotePropertyValue "Canary_Incident"
                 $rawincident = $i | ConvertTo-Json
                 $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawincident -Method POST
                 Write-Log -loglevel 2 -logdetail "Incident ($counter) sent. Result: $($result.StatusCode) $($result.StatusDescription)"
@@ -286,11 +288,12 @@ Function Send-IncidentEvents ($incidents) {
 
 Function Send-AuditEvents ($audits) {
     Write-Log -loglevel 2 -logdetail "Sending audit event results to $($webhookendpoint)..."
-    
     Try {
         if ($audits.Count -eq 0) {
             $rawbody = New-Object PSObject -Property @{
+                Log_Type = "Canary_ScriptInfo"
                 Message = "No new audit events"
+                Msg_Time = [int](Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s -Millisecond 0)
             }
             if ($auditfetcherror -ne "")  {
                 $rawbody.Message = "No audit events sent. There were errors encountered fetching audit events; see log for more details: $($auditfetcherror)"
@@ -304,6 +307,9 @@ Function Send-AuditEvents ($audits) {
             $counter = 0
             ForEach ($i in $audits) {
                 $counter++
+                $i | Add-Member -NotePropertyName "Log_Type" -NotePropertyValue "Canary_Audit"
+                $normalmsgdate = Get-Date -Date ([datetime]::parseexact($i.timestamp, "yyyy-MM-dd HH:mm:ss UTCzz00", $null)).ToUniversalTime() -UFormat %s    
+                $i | Add-Member -NotePropertyName "Msg_Time" -NotePropertyValue $normalmsgdate
                 $rawaudits = $i | ConvertTo-Json
                 $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawaudits -Method POST
                 Write-Log -loglevel 2 -logdetail "Audit event ($counter) sent. Result: $($result.StatusCode) $($result.StatusDescription)"
@@ -313,7 +319,6 @@ Function Send-AuditEvents ($audits) {
     Catch {
         Write-Log -loglevel 3 -logdetail "***ERROR*** An error occured sending webhook: $_"
     }
-    #>
 }
 
 ### MAIN ###
