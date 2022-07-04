@@ -23,7 +23,7 @@ param(
 
 ### Global Variables - yeah I know they're bad, don't @ me ###
 
-$configfile = "C:\LogRhythm\Scripts\Get-CanaryLogs\Get-CanaryLogs_config.json"
+$configfile = "C:\LogRhythm\LogScripts\Get-CanaryLogs\Get-CanaryLogs_config.json"
 $config = Get-Content -Raw $configfile | ConvertFrom-Json
 $logfile = $config.logfile
 $globalloglevel = $config.loglevel
@@ -32,6 +32,7 @@ $domainhash = $config.domainhash
 $apitoken = $config.apitoken
 $auditfetchlimit = $config.auditfetchlimit
 $webhookendpoint = $config.webhookendpoint
+$proxy = $config.proxy
 $auditfetcherror = ""
 $incidentfetcherror = ""
 
@@ -193,7 +194,13 @@ Function Get-IncidentEvents {
     }
     Write-Log -loglevel 1 -logdetail "Querying API for new incident events..."
     Try {
-        $result = Invoke-RestMethod -Uri $uri -Body $params -Method GET
+        if (($proxy -ne $null) -and ($proxy -ne "")) {
+
+            $result = Invoke-RestMethod -Uri $uri -Body $params -Method GET -UseBasicParsing -Proxy $proxy
+        }
+        else {
+            $result = Invoke-RestMethod -Uri $uri -Body $params -Method GET -UseBasicParsing
+        }
     }
     Catch {
         Write-Log -loglevel 3 -logdetail "***ERROR*** An error occured retreiving events from API: $_"
@@ -227,7 +234,12 @@ Function Get-AuditEvents {
     }
     Write-Log -loglevel 1 -logdetail "Querying API for new audit events..."
     Try {
-        $result = Invoke-RestMethod -Uri $uri -Body $params -Method GET
+        if (($proxy -ne $null) -and ($proxy -ne "")) {
+            $result = Invoke-RestMethod -Uri $uri -Body $params -Method GET -UseBasicParsing -Proxy $proxy
+        }
+        else {
+            $result = Invoke-RestMethod -Uri $uri -Body $params -Method GET -UseBasicParsing
+        }
     }
     Catch {
         Write-Log -loglevel 3 -logdetail "***ERROR*** An error occured retreiving audit events from API: $_"
@@ -266,7 +278,12 @@ Function Send-IncidentEvents ($incidents) {
                 $rawbody.Message = "No incidents sent. There were errors encountered fetching incidents; see log for more details: $($incidentfetcherror)"
             }
             $body = $rawbody | ConvertTo-Json
-            $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST -UseBasicParsing
+            if (($proxy -ne $null) -and ($proxy -ne "")) {
+                $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST -UseBasicParsing -Proxy $proxy
+            }
+            else {
+                $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST -UseBasicParsing
+            }
             Write-Log -loglevel 2 -logdetail "No new incidents to send.  Sent status message. Result: $($result.StatusCode) $($result.StatusDescription)"
         }
         else {
@@ -299,7 +316,12 @@ Function Send-AuditEvents ($audits) {
                 $rawbody.Message = "No audit events sent. There were errors encountered fetching audit events; see log for more details: $($auditfetcherror)"
             }
             $body = $rawbody | ConvertTo-Json
-            $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST -UseBasicParsing
+            if (($proxy -ne $null) -and ($proxy -ne "")) {
+                $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST -UseBasicParsing -Proxy $proxy
+            }
+            else {
+                $result = Invoke-WebRequest -Uri $webhookendpoint -Body $body -Method POST -UseBasicParsing
+            }
             Write-Log -loglevel 2 -logdetail "No new audit events to send.  Sent status message. Result: $($result.StatusCode) $($result.StatusDescription)"
         }
         else {
@@ -311,7 +333,12 @@ Function Send-AuditEvents ($audits) {
                 $normalmsgdate = Get-Date -Date ([datetime]::parseexact($i.timestamp, "yyyy-MM-dd HH:mm:ss UTCzz00", $null)).ToUniversalTime() -UFormat %s    
                 $i | Add-Member -NotePropertyName "Msg_Time" -NotePropertyValue $normalmsgdate
                 $rawaudits = $i | ConvertTo-Json
-                $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawaudits -Method POST -UseBasicParsing
+                if (($proxy -ne $null) -and ($proxy -ne "")) {
+                    $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawaudits -Method POST -UseBasicParsing -Proxy $proxy
+                }
+                else {
+                    $result = Invoke-WebRequest -Uri $webhookendpoint -Body $rawaudits -Method POST -UseBasicParsing
+                }
                 Write-Log -loglevel 2 -logdetail "Audit event ($counter) sent. Result: $($result.StatusCode) $($result.StatusDescription)"
             }
         }
@@ -325,6 +352,9 @@ Function Send-AuditEvents ($audits) {
 
 if ($IgnoreCertErrors.IsPresent) {
     Write-Log -loglevel 3 -logdetail "***WARNING*** Script invoked with IgnoreCertErrors. Certificate errors will be ignored"
+}
+if (($proxy -ne $null) -and ($proxy -ne "")) {
+    Write-Log -loglevel -logdetail "Using proxy $($proxy)"
 }
 $last_state = Get-State
 $incidentresults = Get-IncidentEvents -LastUpdateID $last_state.incidentstate
