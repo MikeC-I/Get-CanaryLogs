@@ -1,3 +1,3 @@
 # Get-CanaryLogs
 
-Script and OC Pipeline for collecting Thinkst Canary logs via API and sending to Open Collector via Webhooks
+Script for collecting Thinkst Canary logs via API and writing them to local files
