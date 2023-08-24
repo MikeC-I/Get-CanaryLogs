@@ -1,9 +1,0 @@
-{
-    "logfile":"C:\\LogRhythm\\Scripts\\Get-CanaryLogs\\Get-CanaryLogs_log.log",
-    "loglevel": 1,
-    "statefile": "C:\\LogRhythm\\Scripts\\Get-CanaryLogs\\Get-CanaryLogs_state.state",
-    "domainhash":"<DOMAINHASHGOESHERE>",
-    "apitoken":"<APITOKENGOESHERE>",
-    "webhookendpoint":"http://<webhooklistener>",
-    "auditfetchlimit":100
-}
