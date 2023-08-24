@@ -1,0 +1,11 @@
+{
+    "logfile":"C:\\LogRhythm\\LogScripts\\Get-CanaryLogs\\Get-CanaryLogs_log_localfile.log",
+	"incidentlogfile":"C:\\LogRhythm\\LogScripts\\Get-CanaryLogs\\Canary_Incidents.log",
+	"auditlogfile":"C:\\LogRhythm\\LogScripts\\Get-CanaryLogs\\Canary_Audit.log",
+    "loglevel": 1,
+    "statefile": "C:\\LogRhythm\\LogScripts\\Get-CanaryLogs\\Get-CanaryLogs_state_localfile.state",
+    "domainhash":"HASH",
+    "apitoken":"APITOKEN",
+    "auditfetchlimit":100,
+    "proxy" : ""
+}
